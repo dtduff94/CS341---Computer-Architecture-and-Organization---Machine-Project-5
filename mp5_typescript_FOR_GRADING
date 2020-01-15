@@ -1,0 +1,843 @@
+Script started on Fri Dec 13 16:58:52 2019
+warning: could not update utmp entry
+blade57(1)% pwd
+/courses/cs341/f19/cheungr/dtduff94/mp5
+blade57(2)% ls -l
+total 676
+-rw-r--r--   1 dtduff94    16472 Dec 13 16:48 #typescript#
+-rw-r--r--   1 dtduff94      362 Dec 13 14:29 #window2.txt#
+-rw-r--r--   1 dtduff94    12986 Dec 11 22:17 Rubric.docx
+-rw-r--r--   1 dtduff94     7755 Dec 12 22:19 cmds.c
+-rw-r--r--   1 dtduff94     7537 Dec 11 22:17 cmds.c~
+-rw-r--r--   1 dtduff94     8646 Dec 13 16:24 cmds.opc
+-rw-r--r--   1 dtduff94     3589 Dec 13 14:20 comintspack.c
+-rw-r--r--   1 dtduff94     3618 Dec 13 14:16 comintspack.c~
+-rw-r--r--   1 dtduff94      343 Dec 11 22:17 comintspack.h
+-rw-r--r--   1 dtduff94     5111 Dec 13 16:25 comintspack.opc
+-rw-r--r--   1 dtduff94      277 Dec 13 16:58 discussion.txt
+-rw-r--r--   1 dtduff94     3665 Dec 11 22:17 makefile
+-rw-r--r--   1 dtduff94   416687 Dec 11 22:17 mp5.pdf
+-rw-r--r--   1 dtduff94     2374 Dec 11 22:17 slex.c
+-rw-r--r--   1 dtduff94     1859 Dec 11 22:17 slex.h
+-rw-r--r--   1 dtduff94     4447 Dec 13 16:25 slex.opc
+lrwxrwxrwx   1 dtduff94       18 Dec 13 16:25 syms -> test_tickpack.syms
+-rw-r--r--   1 dtduff94      448 Dec 11 22:17 test_comintspack.c
+-rw-r--r--   1 dtduff94      905 Dec 11 22:17 test_tickpack.c
+-rwxr-xr-x   1 dtduff94    26712 Dec 13 16:25 test_tickpack.lnx
+-rw-r--r--   1 dtduff94     4129 Dec 13 16:25 test_tickpack.opc
+-rw-r--r--   1 dtduff94     2468 Dec 13 16:25 test_tickpack.syms
+-rw-r--r--   1 dtduff94     2427 Dec 11 22:17 tickpack.c
+-rw-r--r--   1 dtduff94      264 Dec 11 22:17 tickpack.h
+-rw-r--r--   1 dtduff94     2655 Dec 13 16:25 tickpack.opc
+-rw-r--r--   1 dtduff94     1924 Dec 11 22:17 tutor.c
+-rwxr-xr-x   1 dtduff94    45854 Dec 13 16:25 tutor.lnx
+-rw-r--r--   1 dtduff94     4574 Dec 13 16:25 tutor.opc
+-rw-r--r--   1 dtduff94     3897 Dec 13 16:25 tutor.syms
+-rw-r--r--   1 dtduff94        0 Dec 13 16:58 typescript
+-rw-r--r--   1 dtduff94      874 Dec 13 16:39 typescript_COM1
+-rw-r--r--   1 dtduff94    16384 Dec 13 16:38 typescript_COM2
+-rw-r--r--   1 dtduff94     1939 Dec 13 14:49 window1.txt
+-rw-r--r--   1 dtduff94     1901 Dec 11 22:17 window1.txt~
+-rw-r--r--   1 dtduff94      401 Dec 11 22:17 window2.txt
+blade57(3)% cat comintspack.c
+/* comintspack.c */
+/* package for using com port interrupts */
+
+#include <stdio.h>
+#include <serial.h>
+#include <pic.h>
+#include <cpu.h>
+#include "comintspack.h"
+
+/* ascii characters used */
+#define CR '\x0d'
+#define LF '\x0a'
+
+void irq4inthandc (void);
+static void (*this_callback)(char *);
+static char *this_buffer;
+static int this_size;
+static int this_mode;
+static int cursor;
+
+/* This assembler routine is supplied in the SAPC library */
+/* in irq4.s, calls irq4inthandc */
+extern IntHandler irq4inthand;
+
+void init_comints (int mode, void (*callback)(char *), char *buffer, int size)
+{
+   /* This function expects to be called with interrupts disabled.
+    * It may be called by the background between cli() and sti() calls
+    * or by an interrupt service routine (ISR) where interrupts are off.
+    * That is why this code does not call cli() or sti() itself.
+    */
+
+   /* Save the inputs statically for use in the ISR */
+   this_callback = callback;
+   this_buffer = buffer;
+   this_size = size;
+   this_mode = mode;
+   cursor = 0;  /* buffer count */
+   
+   /* COM1 uses IRQ 4 */
+   /* First drain any input out of the COM1's receiver--a full FIFO */
+   /* (multichar buffer in UART) causes this UART to stop interrupting!  */
+   while (inpt(COM1_BASE+UART_LSR)&UART_LSR_DR)/* while one there */
+      inpt(COM1_BASE+UART_RX); /* pull another char out of UART */
+
+   /* You fill in: */
+   /* arm the interrupt using irq4inthand,
+   i.e., put irq4inthand in the right place in the IDT */
+   set_intr_gate(COM1_IRQ+IRQ_TO_INT_N_SHIFT, &irq4inthand);
+
+   /* enable interrupts for COM1's IRQ in the PIC */
+   pic_enable_irq(COM1_IRQ);  
+
+   if (mode == RECEIVE) {
+     /* turn on receiver interrupts in the UART's IER */
+     outpt(COM1_BASE+UART_IER, UART_IER_RDI);
+   }
+   else {
+     /* turn on transmitter interrupts in the UART's IER */
+     outpt(COM1_BASE+UART_IER, UART_IER_THRI);
+   }
+}
+
+void shutdown_comints ()
+{
+  /* This function expects to be called with interrupts disabled.
+   * It may be called by the background between cli() and sti() calls
+   * or by an interrupt service routine (ISR) where interrupts are off.
+   * That is why this code does not call cli() or sti() itself.
+   */
+
+  /* You fill in: */
+  /* disable COM1's IRQ in the PIC */
+  pic_disable_irq(COM1_IRQ);
+
+  /* turn off transmitter and receiver interrupts in COM1's IER */
+  outpt(COM1_BASE+UART_IER, 0);
+
+}
+
+/* this is called from irq4inthand, the assembler interrupt envelope */
+/* that routine saves the C compiler scratch registers */
+/* calls this function to process the interrupt */
+/* restores the C compiler scratch registers and executes iret */
+void irq4inthandc(void)
+{
+  char c;
+  pic_end_int();                      /* notify pic that its part is done */
+   
+  if (this_mode == RECEIVE) {         /* receive interrupt */
+    /* you write the code here */
+    c = inpt(COM1_BASE+UART_RX);
+    outpt(COM1_BASE+UART_TX, c);
+    this_buffer[cursor++] = c;
+    if (cursor = this_size - 1) {
+      outpt(COM1_BASE+UART_TX, LF);
+      this_buffer[cursor] = '\0';
+      (*this_callback)(this_buffer);
+    }
+  }
+  else {                            /* transmit interrupt */
+    /* you write the code here */
+    while (c != '\0') {
+      c = this_buffer[cursor++];
+      outpt(COM1_BASE+UART_TX, c);
+    }
+    (*this_callback)(this_buffer);
+  }
+} /*200920*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+blade57(4)% cat cmds.c
+/******************************************************************
+*
+*   file:     cmds.c
+*   bob wilson: changed the COM1 driver part of the assignment - 2/17/2008
+*   bob wilson:  added solution for mp5 - 11/27/2004
+*   author:   betty o'neil
+*   date:     dim dark past
+*
+*   semantic actions for commands called by tutor (cs241, hw2)
+*
+*   revisions:
+*      9/90  eb   cleanup, convert function declarations to ansi
+*      9/91  eb   changes so that this can be used for hw1
+*/
+
+/* the Makefile arranges that #include <..> searches in the right
+   places for these headers-- */
+#include <stdio.h>
+#include <slex.h>
+#ifdef SAPC
+#include <serial.h>
+#include "tickpack.h"
+#include "comintspack.h"
+#endif
+
+#define PROMPT "Prompt: \n\r"
+/*===================================================================*
+*
+*   Command table for tutor program - an array of structures of type cmd
+*   - for each command provide the token, the function to call when 
+*   that token is found, and the help message.
+*
+*   slex.h contains the typdef for struct cmd, and declares the 
+*   cmds array as extern to all the other parts of the program.
+*   Code in slex.c parses user input command line and calls the
+*   requested semantic action, passing a pointer to the cmd struct
+*   and any arguments the user may have entered.
+*
+*===================================================================*/
+#define USECS_PER_SEC 1000000
+#define MAXLINE 200
+
+PROTOTYPE int quit(Cmd *cp, char *arguments);
+PROTOTYPE int mem_display(Cmd *cp, char *arguments);
+PROTOTYPE int mem_set(Cmd *cp, char *arguments);
+PROTOTYPE int help(Cmd *cp, char *arguments);
+PROTOTYPE int timeon ( Cmd *cp, char *arguments);
+PROTOTYPE int timeoff ( Cmd *cp, char *arguments);
+PROTOTYPE int spi ( Cmd *cp, char *arguments);
+PROTOTYPE void process_input(char *buffer);
+PROTOTYPE void process_output(char *buffer);
+PROTOTYPE void tick_print(void);
+
+/* command table */
+
+Cmd cmds[] = {{"timeon", timeon, "Timer On: timeon <interval in secs>"},
+             {"timeoff", timeoff, "Timer Off: timeoff "},
+             {"spi", spi, "Serial Port Interrupts: spi <on/off>"},
+             {"md",  mem_display, "Memory display: md <addr>"},
+             {"ms", mem_set, "Memory set: ms <addr>"},
+             {"h", help, "Help: h <cmd> or h (for all)"},
+             {"q",  quit, "Quit" },
+             {NULL, NULL,  NULL}};   /* null cmd to flag end of table */
+
+/*===================================================================*
+*               command                 routines                     
+*
+*   Each command routine is called with 2 args, the remaining 
+*   part of the line to parse and a pointer to the struct cmd for this 
+*   command. Each returns 0 for continue or 1 for all-done.  
+*
+*===================================================================*/
+
+static int timer_on;            /* flag for timer int on */
+static int ticks;               /* tick count to display */
+
+static int port_on;             /* port ints are enabled */
+static char buffer[MAXLINE];
+/*===================================================================
+*
+*     timeon: timer interrupts every interval seconds and displays count
+*
+*====================================================================*/
+
+int timeon (Cmd *cp, char *arguments)
+{
+  unsigned int interval;
+
+  if ((sscanf(arguments, "%d", &interval))!=1) {
+    printf ("Proper usage : %s\n", cp->help);
+    return 0; 
+  }
+  
+  init_ticks(interval * USECS_PER_SEC, &tick_print);
+  timer_on = 1;
+  ticks = 0;
+  printf("%s", "timer on\n");
+  return 0;
+}
+
+void tick_print(void)
+{
+  ticks++;
+  printf("(%d)\n", ticks);
+}
+
+/*=====================================================================
+*
+*     timeoff: shut down timer and stop printing of count
+*
+*======================================================================*/
+
+int timeoff (Cmd *cp, char *arguments)
+{
+  shutdown_ticks();
+  timer_on = 0;
+  ticks = 0;
+  printf("%s", "timer off\n");
+  return 0;
+}
+
+/*=====================================================================
+*
+*     spi: set serial port interrupts either on or off
+*
+*======================================================================*/
+
+int spi (Cmd *cp, char *arguments)
+{
+   char on_off[MAXLINE];
+
+   if (sscanf(arguments,"%s", on_off) != 1){
+     printf ("Proper Usage : %s\n", cp->help);
+     return 0; 
+   }
+
+   if(!strcmp(on_off,"on")) {   /* turning on */ 
+     port_on = 1;
+     /* send prompt to user on COM1 then alternately 
+      * print user entries to COM2 and prompts to COM1 
+      * via interrupts and the callback functions below 
+      */
+
+     cli();       /* see comments in comintpack.c */
+     init_comints(TRANSMIT, process_output, PROMPT, strlen(PROMPT));
+     sti();
+     printf("comints for COM1 on\n");
+   } 
+   else {                       /* turning off */
+     cli();      /* see comments in comintspack.c */ 
+     shutdown_comints();
+     sti();
+     port_on = 0;
+     printf("comints for COM1 off\n");
+   }
+   return 0;
+}
+
+/* interupts are disabled during execution of these two callback functions */
+
+void process_output(char *prompt)
+{
+     /* you write the code here */
+  shutdown_comints();
+  init_comints(RECEIVE, process_input, buffer, MAXLINE);
+}
+
+void process_input(char *received)
+{
+     /* you write the code here */
+  shutdown_comints();
+  printf("%s\n", received);
+  init_comints(TRANSMIT, process_output, PROMPT, strlen(PROMPT));
+}
+/*===================================================================*
+*               command                 routines                     
+*
+*   Each command routine is called with 2 args, the remaining 
+*   part of the line to parse and a pointer to the struct cmd for this 
+*   command. Each returns 0 for continue or 1 for all-done.  
+*
+*===================================================================*/
+
+int quit(Cmd *cp, char *arguments)
+{
+  if (timer_on) {
+     shutdown_ticks();
+     timer_on = 0;
+  }
+  if (port_on) {
+     cli();      /* see comments in comintspack.c */ 
+     shutdown_comints();
+     sti();
+     port_on = 0;
+  }
+  return 1;                     /* all done flag */
+}
+
+/*===================================================================*
+*
+*   mem_display: display contents of a single byte in hex
+*
+*/
+
+int mem_display(Cmd *cp, char *arguments)
+{
+  int arg=0;
+  unsigned char *memloc;  /* note ptr to *byte* (could use char *) */
+  
+  if (sscanf(arguments, "%x", &arg)==1) {
+    memloc = (unsigned char *)arg;
+    printf("%x : ", arg);
+    printf("%2x ", *memloc);
+    printf("\n");
+    return 0;
+  } else {
+    printf("%s\n", cp->help);
+    return 0;
+  }
+}
+
+/********************************************************/
+
+/* mem_set : ms <hexaddress> <new_val> 
+ *     stores byte new_val at address, both are given 
+ *     in 'arguments'
+*/
+
+int mem_set(Cmd *cp, char *arguments) 
+{
+  int address, new_val;
+  unsigned char *ptr;
+
+  if (sscanf(arguments, "%x %x", &address, &new_val)==2) {
+    ptr = (unsigned char *)address;
+    *ptr = new_val;
+    return 0;
+  } else {
+    printf("%s\n", cp->help);
+    return 0;
+  }
+}
+
+/****************************************************/
+
+/* help : display a help message of the 'arguments'
+ *      command, or list all commands if no arg.
+*/
+
+int help(Cmd *cp, char *arguments) 
+{
+  int stat, cmd_num, pos;
+
+  /* reuse code that matches command token-- */
+  stat = slex(arguments, cmds, &cmd_num, &pos);
+  if (stat < 0) {               /* if no command token found in args */
+    printf("     cmd    help message\n");
+    printf("     ---    ------------\n");
+    for (cp = cmds; cp->cmdtoken; cp++)   /* show all commands */
+      printf("%8s    %s\n",cp->cmdtoken, cp->help);
+  } else {                      /* found command token, just print that one */
+    printf("%s\n", cmds[cmd_num].help);
+    return 0;
+  }
+  return 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+blade57(5)% make clean
+rm -f *.o *.opc *.syms *.usyms *.lnx tutor core syms usyms
+blade57(6)% make tutor.lnx
+/groups/ulab/bin/i386-gcc -g -Wall -Wstrict-prototypes -Wmissing-prototypes -Wno-uninitialized -Wshadow -ansi -D__USE_FIXED_PROTOTYPES__ -I/home/dtduff94/cs341/mp5 -I/groups/ulab/pcdev/include -c -o cmds.opc cmds.c
+/groups/ulab/bin/i386-gcc -g -Wall -Wstrict-prototypes -Wmissing-prototypes -Wno-uninitialized -Wshadow -ansi -D__USE_FIXED_PROTOTYPES__ -I/home/dtduff94/cs341/mp5 -I/groups/ulab/pcdev/include -c -o /home/dtduff94/cs341/mp5/tutor.opc /home/dtduff94/cs341/mp5/tutor.c
+/groups/ulab/bin/i386-gcc -g -Wall -Wstrict-prototypes -Wmissing-prototypes -Wno-uninitialized -Wshadow -ansi -D__USE_FIXED_PROTOTYPES__ -I/home/dtduff94/cs341/mp5 -I/groups/ulab/pcdev/include -c -o /home/dtduff94/cs341/mp5/slex.opc /home/dtduff94/cs341/mp5/slex.c
+/groups/ulab/bin/i386-gcc -g -Wall -Wstrict-prototypes -Wmissing-prototypes -Wno-uninitialized -Wshadow -ansi -D__USE_FIXED_PROTOTYPES__ -I/home/dtduff94/cs341/mp5 -I/groups/ulab/pcdev/include -c -o tickpack.opc tickpack.c
+/groups/ulab/bin/i386-gcc -g -Wall -Wstrict-prototypes -Wmissing-prototypes -Wno-uninitialized -Wshadow -ansi -D__USE_FIXED_PROTOTYPES__ -I/home/dtduff94/cs341/mp5 -I/groups/ulab/pcdev/include -c -o comintspack.opc comintspack.c
+comintspack.c: In function `irq4inthandc':
+comintspack.c:95: warning: suggest parentheses around assignment used as truth value
+/groups/ulab/bin/i386-ld -N -Ttext 1000e0 -o tutor.lnx \
+        /groups/ulab/pcdev/lib/startup0.opc /groups/ulab/pcdev/lib/startup.opc \
+        /home/dtduff94/cs341/mp5/tutor.opc /home/dtduff94/cs341/mp5/slex.opc tickpack.opc comintspack.opc cmds.opc /groups/ulab/pcdev/lib/libc.a
+rm -f syms;/groups/ulab/bin/i386-nm -n tutor.lnx>tutor.syms;ln -s tutor.syms syms
+blade57(7)% ls
+#typescript#        comintspack.h       syms                tutor.opc
+#window2.txt#       comintspack.opc     test_comintspack.c  tutor.syms
+Rubric.docx         discussion.txt      test_tickpack.c     typescript
+cmds.c              makefile            tickpack.c          typescript_COM1
+cmds.c~             mp5.pdf             tickpack.h          typescript_COM2
+cmds.opc            slex.c              tickpack.opc        window1.txt
+comintspack.c       slex.h              tutor.c             window1.txt~
+comintspack.c~      slex.opc            tutor.lnx           window2.txt
+blade57(8)% cat typescript_COM2
+Script started on Fri 13 Dec 2019 04:28:47 PM EST
+tuser@tutor-vserver:~$ mtip -l /dev/ttyS0Oscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[C[10Pmv typescript mp4_typescript_part2_Tutorportion
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kmv typescript mp4_typescript_part2_Tutorportion[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[Cmtip -l /dev/ttySO[K
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C0Oscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[C[10Pmv typescript mp4_typescript_part2_Tutorportion
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kscript[4Plsmtip -f measure.lnxscp dtduff94@users.cs.umb.edu:cs341/mp4/measure.lnx .[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[34Pmtip -f measure.lnxls[Kscript[4Plsmv typescript mp4_typescript_part2_Tutorportion[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[Cmtip -l /dev/ttySO[K
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C0[Kmtip -l /dev/ttyS0Oscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[C[10Pmv typescript mp4_typescript_part2_Tutorportion
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kmv typescript mp4_typescript_part2_Tutorportion[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kscript[4Plsmtip -f measure.lnxscp dtduff94@users.cs.umb.edu:cs341/mp4/measure.lnx .[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[34Pmtip -f measure.lnxscp dtduff94@users.cs.umb.edu:cs341/mp4/measure.lnx .[C[C[C[C[C[1P[1@5[C[C[C[C[C[C[C[C[C[C[C[C[C[1P[1P[1P[1P[1P[1P[1P[1@t[1@u[1@t[1@o[1@r
+dtduff94@users.cs.umb.edu's password: 
+tutor.lnx                                       0%    0     0.0KB/s   --:-- ETAtutor.lnx                                     100%   45KB  44.8KB/s   00:00    
+tuser@tutor-vserver:~$ scp dtduff94@users.cs.umb.edu:cs341/mp5/tutor.lnx .[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[33Pmtip -l /dev/ttyS0Oscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[C[10Pmv typescript mp4_typescript_part2_Tutorportion
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kscript[4Plsmtip -f measure.lnx[1P.lnx[1P.lnx[1P.lnx[1P.lnx[1P.lnx[1P.lnx[1P.lnxt.lnxu.lnxt.lnxo.lnxr.lnx
+For command help, type ~?
+For help on args, rerun without args
+Code starts at 0x100100
+Using board # 1 
+Please type <CR> to confirm console setting: 
+Setting console dev to COM2Console: colour EGA+ 80x25
+COM1 at 0x03f8 (irq = 4) is a 16550A
+COM2 at 0x02f8 (irq = 3) is a 16550A
+
+                 Welcome to UMB Tutor for the PC
+   UMB Tutor is a 32-bit protected-mode PC debugger/downloader,
+       based on Linux, UMB Tutor for m68k, and remote gdb.
+UMB Tutor is free software and you are welcome to distribute copies
+of it under certain conditions.  There is no warranty for this program.
+The copyright and warranty provisions follow the Gnu general public
+license, available for view in gdb and elsewhere.  Full sources available.
+--bugs, suggestions, questions to eoneil@cs.umb.edu
+
+Exception 3 at EIP=00057a9b: Breakpoint
+Tutor> ~downloading tutor.lnx
+
+...........Done.
+
+Download done, setting EIP to 100100.
+Tutor> go 100100
+    cmd     help message
+  timeon    Timer On: timeon <interval in secs>
+ timeoff    Timer Off: timeoff 
+     spi    Serial Port Interrupts: spi <on/off>
+      md    Memory display: md <addr>
+      ms    Memory set: ms <addr>
+       h    Help: h <cmd> or h (for all)
+       q    Quit
+PC-tutor> spi on
+comints for COM1 on
+PC-tutor> f
+D
+a
+n
+i
+e
+l
+D
+u
+f
+f
+T
+e
+s
+t
+R
+u
+n
+/
+0
+c
+r
+g
+f
+d
+a
+d
+g
+r
+a
+s
+d
+timer on
+ No such command
+PC-tutor> timeron
+ No such command
+PC-tutor> timeon
+Proper usage : Timer On: timeon <interval in secs>
+PC-tutor> timeoff
+timer off
+PC-tutor> t
+i
+m
+e
+o
+n
+~q 
+Quit handler: 
+killing process 1998 Leaving board #1
+tuser@tutor-vserver:~$ exit
+exit
+
+Script done on Fri 13 Dec 2019 04:36:52 PM EST
+[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kscript[4Plsmtip -f measure.lnxscp dtduff94@users.cs.umb.edu:cs341/mp4/measure.lnx .[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[34Pmtip -f measure.lnxls[Kscript[4Plsmv typescript mp4_typescript_part2_Tutorportion[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[Cmtip -l /dev/ttySO[K
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C0[Kmtip -l /dev/ttyS0Oscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[C[10Pmv typescript mp4_typescript_part2_Tutorportion
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kmv typescript mp4_typescript_part2_Tutorportion[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kscript[4Plsmtip -f measure.lnxscp dtduff94@users.cs.umb.edu:cs341/mp4/measure.lnx .[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[34Pmtip -f measure.lnxscp dtduff94@users.cs.umb.edu:cs341/mp4/measure.lnx .[C[C[C[C[C[1P[1@5[C[C[C[C[C[C[C[C[C[C[C[C[C[1P[1P[1P[1P[1P[1P[1P[1@t[1@u[1@t[1@o[1@r
+dtduff94@users.cs.umb.edu's password: 
+tutor.lnx                                       0%    0     0.0KB/s   --:-- ETAtutor.lnx                                     100%   45KB  44.8KB/s   00:00    
+tuser@tutor-vserver:~$ scp dtduff94@users.cs.umb.edu:cs341/mp5/tutor.lnx .[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[33Pmtip -l /dev/ttyS0Oscp mp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[C[10Pmv typescript mp4_typescript_part2_Tutorportion
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cls[Kscript[4Plsmtip -f measure.lnx[1P.lnx[1P.lnx[1P.lnx[1P.lnx[1P.lnx[1P.lnx[1P.lnxt.lnxu.lnxt.lnxo.lnxr.lnx
+For command help, type ~?
+For help on args, rerun without args
+Code starts at 0x100100
+Using board # 1 
+Please type <CR> to confirm console setting: 
+Setting console dev to COM2Console: colour EGA+ 80x25
+COM1 at 0x03f8 (irq = 4) is a 16550A
+COM2 at 0x02f8 (irq = 3) is a 16550A
+
+                 Welcome to UMB Tutor for the PC
+   UMB Tutor is a 32-bit protected-mode PC debugger/downloader,
+       based on Linux, UMB Tutor for m68k, and remote gdb.
+UMB Tutor is free software and you are welcome to distribute copies
+of it under certain conditions.  There is no warranty for this program.
+The copyright and warranty provisions follow the Gnu general public
+license, available for view in gdb and elsewhere.  Full sources available.
+--bugs, suggestions, questions to eoneil@cs.umb.edu
+
+Exception 3 at EIP=00057a9b: Breakpoint
+Tutor> ~downloading tutor.lnx
+
+...........Done.
+
+Download done, setting EIP to 100100.
+Tutor> go 100100
+    cmd     help message
+  timeon    Timer On: timeon <interval in secs>
+ timeoff    Timer Off: timeoff 
+     spi    Serial Port Interrupts: spi <on/off>
+      md    Memory display: md <addr>
+      ms    Memory set: ms <addr>
+       h    Help: h <cmd> or h (for all)
+       q    Quit
+PC-tutor> spi on
+comints for COM1 on
+PC-tutor> f
+D
+a
+n
+i
+e
+l
+D
+u
+f
+f
+T
+e
+s
+t
+R
+u
+n
+/
+0
+c
+r
+g
+f
+d
+a
+d
+g
+r
+a
+s
+d
+timer on
+ No such command
+PC-tutor> timeron
+ No such command
+PC-tutor> timeon
+Proper usage : Timer On: timeon <interval in secs>
+PC-tutor> timeoff
+timer off
+PC-tutor> t
+i
+m
+e
+o
+n
+~q 
+Quit handler: 
+killing process 1998 Leaving board #1
+tuser@tutor-vserver:~$ exit
+exit
+Script done, file is typescript
+tuser@tutor-vserver:~$ ls
+[0m[01;32mcharGen1[0m                                      [01;32mprintbin.lnx[0m
+charGen1.c                                    [01;32mstrncpy.lnx[0m
+[01;32mcount.lnx[0m                                     [01;34mtestaout[0m
+count.opc                                     test.c
+count.s                                       [01;34mtestelf[0m
+count.syms                                    testelf.syms
+[01;32mecho.lnx[0m                                      [01;32mtest.lnx[0m
+[01;34minclude[0m                                       test.s
+[01;34mlib[0m                                           [01;32mtiny.lnx[0m
+[01;32mmeasure.lnx[0m                                   tiny.opc
+mp2_part1_typescript_VMportion                tiny.s
+mp2_part2_typescript_VMportion_and_Debugging  tutor.c
+mp2_part3_typescript_VMportion                [01;32mtutor.lnx[0m
+mp2_warmup_typescript_part2                   tutor.o
+mp3_typescript_VMportion                      tutor.opc
+mp4_typescript_part1_Tutorportion             typescript
+mp4_typescript_part1_VMTutorportion           typescript111
+mp4_typescript_part2_Tutorportion
+tuser@tutor-vserver:~$ lsscriptmtip -f tutor.lnxscp dtduff94@users.cs.umb.edu:cs341/mp5/tutor.lnx .[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cmp4_typescript_part2_Tutorportion dtduff94@users.cs.ummb.edu:cs341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb[1P.edu:cs341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.[1Pedu:cs341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.e[1Pdu:cs341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.ed[1Pu:cs341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu[1P:cs341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:[1Pcs341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:c[1Ps341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs[1P341/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs3[1P41/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs34[1P1/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs341[1P/mp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs341/[1Pmp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs341/m[1Pp4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs341/mp[1P4[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs341/mp4[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C dtduff94@users.cs.umb.edu:cs341/mp4 [K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[1P dtduff94@users.cs.umb.edu:cs341/mp4
+[K[A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[1P dtduff94@users.cs.umb.edu:cs341/mp4[1P dtduff94@users.cs.umb.edu:cs341/mp4[1P dtduff94@users.cs.umb.edu:cs341/mp4[1P dtduff94@users.cs.umb.edu:cs341/mp4[1P dtduff94@users.cs.umb.edu:cs341/mp4[1P dtduff94@users.cs.umb.edu:cs341/mp4[1P dtduff94@users.cs.umb.edu:cs341/mp4[1P dtduff94@users.cs.umb.edu:cs341/mp4[1P dtduff94@users.cs.umb.edu:cs341/mp4[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[1P dtduff94@users.cs.umb.edu:cs341/mp4[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[1P dtduff94@users.cs.umb.edu:cs341/mp4[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[1P dtduff94@users.cs.umb.edu:cs341/mp4[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cblade57(9)% cat typescript_ COM1
+Script started on Fri 13 Dec 2019 04:31:39 PM EST
+]0;tuser@tutor-vserver: ~tuser@tutor-vserver:~$ mtip -l /dev/ttys[KS0
+For command help, type ~?
+For help on args, rerun without args
+Using board # -1 
+f
+Prompt: 
+ D
+Prompt: 
+ a
+Prompt: 
+ n
+Prompt: 
+ i
+Prompt: 
+ e
+Prompt: 
+ l
+Prompt: 
+ D
+Prompt: 
+ u
+Prompt: 
+ f
+Prompt: 
+ f
+Prompt: 
+ T
+Prompt: 
+ e
+Prompt: 
+ s
+Prompt: 
+ t
+Prompt: 
+ R
+Prompt: 
+ u
+Prompt: 
+ n
+Prompt: 
+ /
+Prompt: 
+ 0
+Prompt: 
+ c
+Prompt: 
+ r
+Prompt: 
+ g
+Prompt: 
+ f
+Prompt: 
+ d
+Prompt: 
+ a
+Prompt: 
+ d
+Prompt: 
+ g
+Prompt: 
+ r
+Prompt: 
+ a
+Prompt: 
+ s
+Prompt: 
+ d
+Prompt: 
+ t
+Prompt: 
+ i
+Prompt: 
+ m
+Prompt: 
+ e
+Prompt: 
+ o
+Prompt: 
+ n
+Prompt: 
+ ~q 
+Quit handler: 
+killing process 2045 Leaving board #-1
+]0;tuser@tutor-vserver: ~tuser@tutor-vserver:~$ exit
+exit
+
+Script done on Fri 13 Dec 2019 04:36:47 PM EST
+blade57(10)% cat discussion.txt
+Daniel Duff
+CS341 - MP5
+12/13/19
+
+1) I tested my code by compiling it and seeing whether or not the characters would exho from COM1 back to COM2 after turning spi on as well as by testing the extra cmds.c commands to make sure they still worked while testing the echo feature.
+
+2) Additionally, unsure why my typescript has the COM2 interaction twice in it but don't confuse it for the COM1 one which is below both of them and has the required Prompt: interaction.
+blade57(11)% exit
+script done on Fri Dec 13 17:00:31 2019
